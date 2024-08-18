@@ -26,7 +26,9 @@ Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt,
     - [Introdução ao Código Limpo](#introdução-ao-código-limpo)
     - [Desenvolvimento Orientado a Testes](#desenvolvimento-orientado-a-testes)
     - [Convenções de Nomenclatura](#convenções-de-nomenclatura)
-      - [Comentários](#comentários)
+    - [Comentários](#comentários)
+    - [Nomeação de Funções](#nomeação-de-funções)
+    - [Nomeação de Variáveis](#nomeação-de-variáveis)
 
 ### Introdução ao Código Limpo
 
@@ -47,7 +49,7 @@ Testar e refatorar estão entrelaçados nesse processo. À medida que você refa
 
 ### Convenções de Nomenclatura
 
-#### Comentários
+### Comentários
 
 Gostaria de primeiro abordar o tópico de comentar código, que é uma prática essencial, mas tende a ser mal aplicada. Comentários desnecessários podem indicar problemas com o código subjacente, como o uso de convenções de nomenclatura ruins. No entanto, se um comentário específico é "necessário" ou não é um pouco subjetivo e depende de quão legível o código foi escrito. Por exemplo, a lógica de um código bem escrito pode ainda ser tão complexa que requer um comentário para esclarecer o que está acontecendo. Nesse caso, pode-se argumentar que o comentário é útil e, portanto, necessário.
 
@@ -92,3 +94,96 @@ for workerID := 0; workerID < 10; workerID++ {
 Com apenas algumas mudanças em nossos nomes de variáveis e funções, conseguimos explicar o que estamos fazendo diretamente no nosso código. Isso é muito mais claro para o leitor porque ele não terá que ler o comentário e depois mapear a prosa para o código. Em vez disso, eles podem simplesmente ler o código para entender o que está fazendo.
 
 Claro, este foi um exemplo relativamente trivial. Escrever código claro e expressivo infelizmente não é sempre tão fácil; pode se tornar cada vez mais difícil à medida que a base de código cresce em complexidade. Quanto mais você praticar escrever comentários com essa mentalidade e evitar explicar o que você está fazendo, mais limpo seu código se tornará.
+
+### Nomeação de Funções
+
+Vamos agora abordar as convenções de nomeação de funções. A regra geral aqui é realmente simples: quanto mais específica a função, mais geral deve ser seu nome. Em outras palavras, queremos começar com um nome de função muito amplo e curto, como `Run` ou `Parse`, que descreve a funcionalidade geral. Vamos imaginar que estamos criando um analisador de configuração. Seguindo essa convenção de nomenclatura, nosso nível superior de abstração pode ser algo como o seguinte:
+
+```go
+func main() {
+    configpath := flag.String("config-path", "", "caminho do arquivo de configuração")
+    flag.Parse()
+
+    config, err := configuration.Parse(*configpath)
+    
+    ...
+}
+```
+
+Focaremos na nomeação da função `Parse`. Apesar de o nome desta função ser muito curto e geral, está bastante claro o que ela tenta alcançar.
+
+Quando vamos um nível mais profundo, a nomeação das nossas funções se torna um pouco mais específica:
+
+```go
+func Parse(filepath string) (Config, error) {
+    switch fileExtension(filepath) {
+    case "json":
+        return parseJSON(filepath)
+    case "yaml":
+        return parseYAML(filepath)
+    case "toml":
+        return parseTOML(filepath)
+    default:
+        return Config{}, ErrUnknownFileExtension
+    }
+}
+```
+
+Aqui, distinguimos claramente as chamadas de funções aninhadas de seu pai sem ser excessivamente específico. Isso permite que cada chamada de função aninhada faça sentido por si só, bem como no contexto do pai. Por outro lado, se tivéssemos nomeado a função `parseJSON` como `json`, ela não poderia se sustentar por conta própria. A funcionalidade se perderia no nome, e não poderíamos mais dizer se essa função está analisando, criando ou convertendo JSON.
+
+Observe que `fileExtension` é um pouco mais específico. No entanto, isso ocorre porque sua funcionalidade é de fato bastante específica por natureza:
+
+```go
+func fileExtension(filepath string) string {
+    segments := strings.Split(filepath, ".")
+    return segments[len(segments)-1]
+}
+```
+
+Esse tipo de progressão lógica nos nomes das funções — de um alto nível de abstração para um mais baixo e específico — torna o código mais fácil de seguir e ler. Considere a alternativa: se nosso nível mais alto de abstração for muito específico, acabaremos com um nome que tenta cobrir todas as bases, como `DetermineFileExtensionAndParseConfigurationFile`. Isso é horrivelmente difícil de ler; estamos tentando ser excessivamente específicos muito cedo e acabamos confundindo o leitor, apesar de tentar ser claro!
+
+### Nomeação de Variáveis
+
+Curiosamente, o oposto é verdadeiro para variáveis. Ao contrário das funções, nossas variáveis devem ser nomeadas de forma mais específica à medida que nos aprofundamos em escopos aninhados.
+
+Você não deve nomear suas variáveis com base em seus tipos, assim como não nomearia seus animais de estimação como 'cachorro' ou 'gato'. – Dave Cheney
+
+Por que nossos nomes de variáveis devem se tornar menos específicos à medida que viajamos mais fundo no escopo de uma função? Simplificando, à medida que o escopo de uma variável se torna menor, fica cada vez mais claro para o leitor o que essa variável representa, eliminando a necessidade de nomes específicos. No exemplo da função `fileExtension` anterior, poderíamos até encurtar o nome da variável `segments` para `s`, se quisermos. O contexto da variável é tão claro que não é necessário explicá-lo mais com nomes de variáveis mais longos. Outro bom exemplo disso é em loops `for` aninhados:
+
+```go
+func PrintBrandsInList(brands []BeerBrand) {
+    for _, b := range brands { 
+        fmt.Println(b)
+    }
+}
+```
+
+No exemplo acima, o escopo da variável `b` é tão pequeno que não precisamos gastar energia extra lembrando o que exatamente ela representa. No entanto, como o escopo de `brands` é um pouco maior, ajuda que seja mais específico. Ao expandir o escopo da variável na função abaixo, essa distinção se torna ainda mais evidente:
+
+```go
+func BeerBrandListToBeerList(beerBrands []BeerBrand) []Beer {
+    var beerList []Beer
+    for _, brand := range beerBrands {
+        for _, beer := range brand {
+            beerList = append(beerList, beer)
+        }
+    }
+    return beerList
+}
+```
+
+Ótimo! Esta função é fácil de ler. Agora, vamos aplicar a lógica oposta (ou seja, errada) ao nomear nossas variáveis:
+
+```go
+func BeerBrandListToBeerList(b []BeerBrand) []Beer {
+    var bl []Beer
+    for _, beerBrand := range b {
+        for _, beerBrandBeerName := range beerBrand {
+            bl = append(bl, beerBrandBeerName)
+        }
+    }
+    return bl
+}
+```
+
+Embora seja possível descobrir o que essa função está fazendo, a brevidade excessiva dos nomes das variáveis torna difícil seguir a lógica conforme viajamos mais fundo. Isso pode facilmente se transformar em uma confusão total, pois estamos misturando nomes de variáveis curtos e longos de forma inconsistente.
