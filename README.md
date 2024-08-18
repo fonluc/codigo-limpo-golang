@@ -32,6 +32,10 @@ Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt,
     - [Limpeza de Funções](#limpeza-de-funções)
     - [Comprimento da Função](#comprimento-da-função)
     - [Assinaturas de Função](#assinaturas-de-função)
+    - [Declaração de Variáveis](#declaração-de-variáveis)
+    - [Go Limpo](#go-limpo)
+    - [Valores Retornados](#valores-retornados)
+    - [Valores Nil](#valores-nil)
 
 ### Introdução ao Código Limpo
 
@@ -524,3 +528,361 @@ func main() {
     fmt.Println(val)
 }
 ```
+
+### Declaração de Variáveis
+
+Além de evitar problemas com escopo e mutabilidade de variáveis, podemos melhorar a legibilidade declarando variáveis o mais próximo possível de seu uso. Em programação C, é comum ver a seguinte abordagem para declarar variáveis:
+
+```go
+func main() {
+  var err error
+  var items []Item
+  var sender, receiver chan Item
+  
+  items = store.GetItems()
+  sender = make(chan Item)
+  receiver = make(chan Item)
+  
+  for _, item := range items {
+    ...
+  }
+}
+```
+
+Isso sofre do mesmo sintoma descrito em nossa discussão sobre escopo de variáveis. Mesmo que essas variáveis possam não ser realmente reatribuídas em nenhum ponto, esse estilo de codificação mantém os leitores em alerta, de maneira errada. Assim como a memória do computador, a memória de curto prazo do nosso cérebro tem uma capacidade limitada. Ter que acompanhar quais variáveis são mutáveis e se um determinado fragmento de código vai ou não alterá-las torna mais difícil entender o que o código está fazendo. Descobrir o valor retornado eventualmente pode ser um pesadelo. Portanto, para facilitar isso para nossos leitores (e para nós mesmos no futuro), é recomendável declarar variáveis o mais próximo possível de seu uso:
+
+```go
+func main() {
+	var sender chan Item
+	sender = make(chan Item)
+
+	go func() {
+		for {
+			select {
+			case item := <-sender:
+				// faça algo
+			}
+		}
+	}()
+}
+```
+
+No entanto, podemos fazer ainda melhor invocando a função diretamente após sua declaração. Isso torna muito mais claro que a lógica da função está associada à variável declarada:
+
+```go
+func main() {
+  sender := func() chan Item {
+    channel := make(chan Item)
+    go func() {
+      for {
+        select { ... }
+      }
+    }()
+    return channel
+  }
+}
+```
+
+E, voltando ao início, podemos mover a função anônima para torná-la uma função nomeada:
+
+```go
+func main() {
+  sender := NewSenderChannel()
+}
+
+func NewSenderChannel() chan Item {
+  channel := make(chan Item)
+  go func() {
+    for {
+      select { ... }
+    }
+  }()
+  return channel
+}
+```
+
+Ainda está claro que estamos declarando uma variável, e a lógica associada ao canal retornado é simples, ao contrário do primeiro exemplo. Isso facilita a navegação pelo código e a compreensão do papel de cada variável.
+
+Claro, isso não impede que possamos modificar nossa variável `sender`. Não há como declarar um struct const ou variáveis estáticas em Go. Isso significa que teremos que nos restringir de modificar essa variável em um ponto posterior do código.
+
+NOTA: A palavra-chave `const` existe, mas é limitada a tipos primitivos apenas.
+
+Uma maneira de contornar isso pode, ao menos, limitar a mutabilidade de uma variável ao nível do pacote. O truque envolve criar uma estrutura com a variável como uma propriedade privada. Essa propriedade privada só é acessível através de outros métodos fornecidos por essa estrutura de encapsulamento. Expandindo nosso exemplo de canal, isso seria algo assim:
+
+```go
+type Sender struct {
+  sender chan Item
+}
+
+func NewSender() *Sender {
+  return &Sender{
+    sender: NewSenderChannel(),
+  }
+}
+
+func (s *Sender) Send(item Item) {
+  s.sender <- item
+}
+```
+
+Agora garantimos que a propriedade `sender` do nosso struct `Sender` nunca seja modificada—pelo menos não de fora do pacote. Até o momento, esta é a única maneira de criar variáveis não primitivas publicamente imutáveis. É um pouco verboso, mas realmente vale o esforço para garantir que não acabemos com bugs estranhos resultantes de modificações acidentais de variáveis.
+
+```go
+func main() {
+  sender := NewSender()
+  sender.Send(&Item{})
+}
+```
+
+Olhando para o exemplo acima, fica claro como isso também simplifica o uso de nosso pacote. Esse modo de ocultar a implementação é benéfico não apenas para os mantenedores do pacote, mas também para os usuários. Agora, ao inicializar e usar a estrutura `Sender`, não há preocupação com sua implementação. Isso abre uma arquitetura muito mais flexível. Como nossos usuários não estão preocupados com a implementação, estamos livres para alterá-la a qualquer momento, já que reduzimos o ponto de contato que os usuários têm com o pacote. Se não quisermos mais usar uma implementação de canal em nosso pacote, podemos facilmente mudar isso sem quebrar o uso do método `Send` (desde que mantenhamos a assinatura atual da função).
+
+NOTA: Há uma explicação fantástica sobre como lidar com a abstração em bibliotecas de cliente, retirada da palestra AWS re:Invent 2017: Embracing Change without Breaking the World (DEV319).
+
+### Go Limpo
+
+Esta seção foca menos nos aspectos genéricos de escrever código Go limpo e mais nos específicos, com ênfase nos princípios subjacentes de código limpo.
+
+### Valores Retornados
+
+*Retornando Erros Definidos*
+
+Vamos começar com uma maneira mais limpa de retornar erros. Como discutimos anteriormente, nosso principal objetivo ao escrever código limpo é garantir a legibilidade, testabilidade e manutenção do código. A técnica para retornar erros que discutiremos aqui atingirá todos esses objetivos com muito pouco esforço.
+
+Vamos considerar a maneira normal de retornar um erro personalizado. Este é um exemplo hipotético retirado de uma implementação de mapa thread-safe que chamamos de `Store`:
+
+```go
+package smelly
+
+func (store *Store) GetItem(id string) (Item, error) {
+    store.mtx.Lock()
+    defer store.mtx.Unlock()
+
+    item, ok := store.items[id]
+    if !ok {
+        return Item{}, errors.New("item could not be found in the store") 
+    }
+    return item, nil
+}
+```
+
+Não há nada inerentemente ruim sobre esta função quando a consideramos isoladamente. Olhamos para o mapa `items` do nosso struct `Store` para ver se já temos um item com o id fornecido. Se tivermos, retornamos; caso contrário, retornamos um erro. Bastante padrão. Então, qual é o problema com retornar erros personalizados como valores de string? Bem, vamos ver o que acontece quando usamos esta função dentro de outro pacote:
+
+```go
+func GetItemHandler(w http.ResponseWriter, r *http.Request) {
+    item, err := smelly.GetItem("123")
+    if err != nil {
+        if err.Error() == "item could not be found in the store" {
+            http.Error(w, err.Error(), http.StatusNotFound)
+            return
+        }
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    } 
+    json.NewEncoder(w).Encode(item)
+}
+```
+
+Isso não é tão ruim. No entanto, há um problema flagrante: Um erro em Go é simplesmente uma interface que implementa uma função (`Error()`) retornando uma string; assim, estamos agora codificando em nosso código o código de erro esperado, o que não é ideal. Essa string codificada é conhecida como uma string mágica. E seu principal problema é a flexibilidade: Se em algum momento decidirmos mudar o valor da string usado para representar um erro, nosso código quebrará (suavemente) a menos que o atualizemos em muitos lugares diferentes. Nosso código está fortemente acoplado—depende dessa string mágica específica e da suposição de que ela nunca mudará à medida que a base de código cresce.
+
+Uma situação ainda pior ocorreria se um cliente usasse nosso pacote em seu próprio código. Imagine que decidimos atualizar nosso pacote e mudamos a string que representa um erro—o software do cliente agora quebraria repentinamente. Isso é algo que queremos evitar. Felizmente, a solução é muito simples:
+
+```go
+package clean
+
+var (
+    NullItem = Item{}
+
+    ErrItemNotFound = errors.New("item could not be found in the store") 
+)
+
+func (store *Store) GetItem(id string) (Item, error) {
+    store.mtx.Lock()
+    defer store.mtx.Unlock()
+
+    item, ok := store.items[id]
+    if !ok {
+        return NullItem, ErrItemNotFound
+    }
+    return item, nil
+}
+```
+
+Ao representar o erro como uma variável (`ErrItemNotFound`), garantimos que qualquer pessoa que use este pacote possa verificar contra a variável em vez da string real que ela retorna:
+
+```go
+func GetItemHandler(w http.ResponseWriter, r *http.Request) {
+    item, err := clean.GetItem("123")
+    if err != nil {
+        if errors.Is(err, clean.ErrItemNotFound) {
+           http.Error(w, err.Error(), http.StatusNotFound)
+            return
+        }
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    } 
+    json.NewEncoder(w).Encode(item)
+}
+```
+
+Isso é muito mais agradável e também mais seguro. Alguns diriam que é mais fácil de ler também. No caso de uma mensagem de erro mais verbosa, certamente seria preferível para um desenvolvedor ler `ErrItemNotFound` do que um romance sobre por que um determinado erro foi retornado.
+
+Essa abordagem não se limita a erros e pode ser usada para outros valores retornados. Como exemplo, também estamos retornando um `NullItem` em vez de `Item{}` como fizemos antes. Existem muitos cenários em que pode ser preferível retornar um objeto definido, em vez de inicializá-lo no retorno.
+
+Retornar valores `NullItem` padrão como fizemos nos exemplos anteriores também pode ser mais seguro em certos casos. Por exemplo, um usuário de nosso
+
+ pacote pode esquecer de verificar erros e acabar inicializando uma variável que aponta para um struct vazio contendo um valor padrão de `nil` como um ou mais valores de propriedade. Ao tentar acessar esse valor `nil` mais tarde no código, o software do cliente entraria em pânico. No entanto, ao retornarmos nosso valor padrão personalizado, podemos garantir que todos os valores que de outra forma seriam `nil` sejam inicializados. Assim, garantimos que não causamos pânicos no software dos nossos usuários.
+
+Isso também nos beneficia. Considere o seguinte: Se quisermos alcançar a mesma segurança sem retornar um valor padrão, teríamos que mudar nosso código em todos os lugares onde retornamos esse tipo de valor vazio. No entanto, com nossa abordagem de valor padrão, agora só precisamos alterar nosso código em um único lugar:
+
+```go
+var NullItem = Item{
+    itemMap: map[string]Item{},
+}
+```
+
+NOTA: Em muitos cenários, invocar um pânico será realmente preferível para indicar que está faltando uma verificação de erro.
+
+NOTA: Cada propriedade de interface em Go tem um valor padrão de `nil`. Isso significa que isso é útil para qualquer struct que tenha uma propriedade de interface. Isso também é verdadeiro para structs que contêm canais, mapas e slices, que também podem ter um valor `nil`.
+
+*Retornando Erros Dinâmicos*
+
+Há certamente alguns cenários onde retornar uma variável de erro pode não ser viável. Em casos onde a informação em erros personalizados é dinâmica, se quisermos descrever eventos de erro mais especificamente, não podemos mais definir e retornar nossos erros estáticos. Aqui está um exemplo:
+
+```go
+func (store *Store) GetItem(id string) (Item, error) {
+    store.mtx.Lock()
+    defer store.mtx.Unlock()
+
+    item, ok := store.items[id]
+    if !ok {
+        return NullItem, fmt.Errorf("Could not find item with ID: %s", id)
+    }
+    return item, nil
+}
+```
+
+Então, o que fazer? Não há um método bem definido ou padrão para lidar e retornar esses tipos de erros dinâmicos. Minha preferência pessoal é retornar uma nova interface, com um pouco de funcionalidade adicional:
+
+```go
+type ErrorDetails interface {
+    Error() string
+    Type() string
+}
+
+type errDetails struct {
+    errtype error
+    details interface{}
+}
+
+func NewErrorDetails(err error, details ...interface{}) ErrorDetails {
+    return &errDetails{
+        errtype: err,
+        details: details,
+    }
+}
+
+func (err *errDetails) Error() string {
+    return fmt.Sprintf("%v: %v", err.errtype, err.details)
+}
+
+func (err *errDetails) Type() error {
+    return err.errtype
+}
+```
+
+Essa nova estrutura de dados ainda funciona como nosso erro padrão. Podemos ainda compará-la com `nil` já que é uma implementação de interface, e ainda podemos chamar `.Error()` nela, então não quebrará implementações existentes. No entanto, a vantagem é que agora podemos verificar o tipo do erro como podíamos anteriormente, apesar de nosso erro agora conter detalhes dinâmicos:
+
+```go
+func (store *Store) GetItem(id string) (Item, error) {
+    store.mtx.Lock()
+    defer store.mtx.Unlock()
+
+    item, ok := store.items[id]
+    if !ok {
+        return NullItem, NewErrorDetails(
+            ErrItemNotFound,
+            fmt.Sprintf("could not find item with id: %s", id))
+    }
+    return item, nil
+}
+```
+
+E nossa função de manipulador HTTP pode então ser refatorada para verificar um erro específico novamente:
+
+```go
+func GetItemHandler(w http.ResponseWriter, r *http.Request) {
+    item, err := clean.GetItem("123")
+    if err != nil {
+        if errors.Is(err.Type(), clean.ErrItemNotFound) {
+            http.Error(w, err.Error(), http.StatusNotFound)
+            return
+        }
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    } 
+    json.NewEncoder(w).Encode(item)
+}
+```
+
+### Valores Nil
+
+Um aspecto controverso de Go é a adição de `nil`. Esse valor corresponde ao valor `NULL` em C e é essencialmente um ponteiro não inicializado. Já vimos alguns dos problemas que `nil` pode causar, mas para resumir: As coisas quebram quando você tenta acessar métodos ou propriedades de um valor `nil`. Portanto, é recomendável evitar retornar um valor `nil sempre que possível. Dessa forma, os usuários do nosso código são menos propensos a acessar valores `nil` acidentalmente.
+
+Existem outros cenários em que é comum encontrar valores `nil` que podem causar algum sofrimento desnecessário. Um exemplo disso é inicializar incorretamente um struct (como no exemplo abaixo), o que pode levar a ele conter propriedades `nil`. Se acessadas, essas propriedades `nil` causarão um pânico.
+
+```go
+type App struct {
+   Cache *KVCache
+}
+
+type KVCache struct {
+  mtx sync.RWMutex
+  store map[string]string
+}
+
+func (cache *KVCache) Add(key, value string) {
+  cache.mtx.Lock()
+  defer cache.mtx.Unlock()
+  
+  cache.store[key] = value
+}
+```
+
+Este código está absolutamente correto. No entanto, o perigo é que nosso `App` pode ser inicializado incorretamente, sem inicializar a propriedade `Cache`. Se o seguinte código for invocado, nossa aplicação entrará em pânico:
+
+```go
+app := App{}
+app.Cache.Add("panic", "now")
+```
+
+A propriedade `Cache` nunca foi inicializada e, portanto, é um ponteiro `nil`. Assim, invocar o método `Add` como fizemos aqui causará um pânico, com a seguinte mensagem:
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+Em vez disso, podemos transformar a propriedade `Cache` de nossa estrutura `App` em uma propriedade privada e criar um método tipo getter para acessá-la. Isso nos dá mais controle sobre o que estamos retornando; especificamente, garante que não estamos retornando um valor `nil`:
+
+```go
+type App struct {
+   cache *KVCache
+}
+
+func (app *App) Cache() *KVCache {
+  if app.cache == nil {
+      app.cache = NewKVCache()
+   }
+   return app.cache
+}
+```
+
+O código que anteriormente causava pânico agora será refatorado para o seguinte:
+
+```go
+app := App{}
+app.Cache().Add("panic", "now")
+```
+
+Isso garante que os usuários de nosso pacote não tenham que se preocupar com a implementação e se estão usando nosso pacote de maneira insegura. Tudo o que eles precisam se preocupar é em escrever seu próprio código limpo.
+
+NOTA: Existem outros métodos para alcançar um resultado seguro semelhante. No entanto, acredito que este é o método mais direto.
