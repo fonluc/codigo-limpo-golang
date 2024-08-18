@@ -14,10 +14,6 @@ Como desenvolvedores, às vezes somos tentados a escrever código de uma maneira
 
 Este documento começa com uma introdução simples e curta aos fundamentos da escrita de código limpo. Mais tarde, discutiremos exemplos concretos de refatoração específicos para Go.
 
-*Uma breve palavra sobre o gofmt*
-
-Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt, porque há muitas coisas com as quais não concordo em relação a essa ferramenta. Prefiro snake case ao invés de camel case, e gosto bastante que minhas variáveis constantes sejam em maiúsculas. E, naturalmente, também tenho muitas opiniões sobre o posicionamento das chaves. Dito isso, o gofmt nos permite ter um padrão comum para escrever código Go, e isso é uma coisa ótima. Como desenvolvedor, posso certamente apreciar que os programadores Go possam se sentir um pouco restritos pelo gofmt, especialmente se discordarem de algumas de suas regras. Mas, na minha opinião, um código homogêneo é mais importante do que ter total liberdade expressiva.
-
 ### Sumário
 
 - [Código Go Limpo](#código-go-limpo)
@@ -32,10 +28,17 @@ Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt,
     - [Limpeza de Funções](#limpeza-de-funções)
     - [Comprimento da Função](#comprimento-da-função)
     - [Assinaturas de Função](#assinaturas-de-função)
+    - [Escopo de Variáveis](#escopo-de-variáveis)
     - [Declaração de Variáveis](#declaração-de-variáveis)
     - [Go Limpo](#go-limpo)
     - [Valores Retornados](#valores-retornados)
+    - [Retornando Erros Dinâmicos](#retornando-erros-dinâmicos)
     - [Valores Nil](#valores-nil)
+    - [Ponteiros em Go](#ponteiros-em-go)
+    - [Mutabilidade de Ponteiros](#mutabilidade-de-ponteiros)
+    - [Fechamentos São Ponteiros de Função](#fechamentos-são-ponteiros-de-função)
+    - [Interfaces em Go](#interfaces-em-go)
+    - [A Interface Vazia em Go](#a-interface-vazia-em-go)
 
 ### Introdução ao Código Limpo
 
@@ -436,7 +439,7 @@ Basicamente, criamos uma nova estrutura chamada RMQChannel que contém o tipo `a
 
 Usaremos essa ideia de envolver funções para introduzir código mais limpo e seguro mais adiante ao discutir `interface{}`.
 
-**Escopo de Variáveis**  
+### Escopo de Variáveis  
 Agora, vamos dar um passo atrás e revisar a ideia de escrever funções menores. Isso tem outro efeito colateral agradável que não cobrimos no capítulo anterior: escrever funções menores pode tipicamente eliminar a dependência de variáveis mutáveis que vazam para o escopo global.
 
 Variáveis globais são problemáticas e não pertencem a código limpo; elas tornam muito difícil para os programadores entenderem o estado atual de uma variável. Se uma variável é global e mutável, então por definição, seu valor pode ser alterado por qualquer parte da base de código. Em nenhum momento você pode garantir que essa variável terá um valor específico... E isso é uma dor de cabeça para todos. Este é mais um exemplo de um problema trivial que é exacerbado quando a base de código se expande.
@@ -744,7 +747,7 @@ NOTA: Em muitos cenários, invocar um pânico será realmente preferível para i
 
 NOTA: Cada propriedade de interface em Go tem um valor padrão de `nil`. Isso significa que isso é útil para qualquer struct que tenha uma propriedade de interface. Isso também é verdadeiro para structs que contêm canais, mapas e slices, que também podem ter um valor `nil`.
 
-*Retornando Erros Dinâmicos*
+### Retornando Erros Dinâmicos
 
 Há certamente alguns cenários onde retornar uma variável de erro pode não ser viável. Em casos onde a informação em erros personalizados é dinâmica, se quisermos descrever eventos de erro mais especificamente, não podemos mais definir e retornar nossos erros estáticos. Aqui está um exemplo:
 
@@ -886,3 +889,530 @@ app.Cache().Add("panic", "now")
 Isso garante que os usuários de nosso pacote não tenham que se preocupar com a implementação e se estão usando nosso pacote de maneira insegura. Tudo o que eles precisam se preocupar é em escrever seu próprio código limpo.
 
 NOTA: Existem outros métodos para alcançar um resultado seguro semelhante. No entanto, acredito que este é o método mais direto.
+
+### Ponteiros em Go
+
+Ponteiros em Go são um tópico bastante extenso. Eles são uma parte muito importante de trabalhar com a linguagem — tanto que é praticamente impossível escrever Go sem algum conhecimento sobre ponteiros e seu funcionamento na linguagem. Portanto, é importante entender como usar ponteiros sem adicionar complexidade desnecessária (e assim, manter seu código limpo). Note que não revisaremos os detalhes de como os ponteiros são implementados em Go. Em vez disso, focaremos nas peculiaridades dos ponteiros em Go e como podemos lidar com elas.
+
+Ponteiros adicionam complexidade ao código. Se não tivermos cuidado, o uso incorreto de ponteiros pode introduzir efeitos colaterais desagradáveis ou bugs que são particularmente difíceis de depurar. Ao aderirmos aos princípios básicos de escrever código limpo que cobrimos na primeira parte deste documento, podemos pelo menos reduzir as chances de introduzir complexidade desnecessária ao nosso código.
+
+### Mutabilidade de Ponteiros
+
+Já analisamos o problema da mutabilidade no contexto de variáveis globais ou de escopo amplo. No entanto, a mutabilidade não é necessariamente sempre uma coisa ruim, e não sou de forma alguma um defensor da escrita de programas funcionalmente puros a 100%. A mutabilidade é uma ferramenta poderosa, mas realmente só devemos usá-la quando for necessário. Vamos dar uma olhada em um exemplo de código que ilustra por que:
+
+```go
+func (store *UserStore) Insert(user *User) error {
+    if store.userExists(user.ID) {
+        return ErrItemAlreadyExists
+    }
+    store.users[user.ID] = user
+    return nil
+}
+
+func (store *UserStore) userExists(id int64) bool {
+    _, ok := store.users[id]
+    return ok
+}
+```
+
+À primeira vista, isso não parece tão ruim. Na verdade, pode até parecer uma função de inserção bastante simples para uma estrutura de lista comum. Aceitamos um ponteiro como entrada e, se não houver outros usuários com esse id, então inserimos o ponteiro do usuário fornecido em nossa lista. Em seguida, usamos essa funcionalidade em nossa API pública para criar novos usuários:
+
+```go
+func CreateUser(w http.ResponseWriter, r *http.Request) {
+    user, err := parseUserFromRequest(r)
+    if err != nil {
+        http.Error(w, err, http.StatusBadRequest)
+        return
+    }
+    if err := insertUser(w, user); err != nil {
+      http.Error(w, err, http.StatusInternalServerError)
+      return
+    }
+}
+
+func insertUser(w http.ResponseWriter, user User) error {
+  	if err := store.Insert(&user); err != nil {
+        return err
+    }
+  	user.Password = ""
+	  return json.NewEncoder(w).Encode(user)
+}
+```
+
+Mais uma vez, à primeira vista, tudo parece bem. Analisamos o usuário a partir da solicitação recebida e inserimos o struct do usuário em nosso armazenamento. Uma vez que temos o usuário inserido com sucesso no armazenamento, então definimos a senha como uma string vazia antes de retornar o usuário como um objeto JSON para nosso cliente. Isso é uma prática bastante comum, tipicamente ao retornar um objeto de usuário cuja senha foi hashada, pois não queremos retornar a senha hashada.
+
+No entanto, imagine que estamos usando um armazenamento na memória baseado em um mapa. Esse código produzirá alguns resultados inesperados. Se verificarmos nosso armazenamento de usuários, veremos que a alteração que fizemos na senha do usuário na função manipuladora HTTP também afetou o objeto em nosso armazenamento. Isso ocorre porque o endereço do ponteiro retornado por `parseUserFromRequest` é o que populou nosso armazenamento, em vez de um valor real. Portanto, ao fazer alterações no valor de senha desreferenciado, acabamos mudando o valor do objeto ao qual estamos apontando em nosso armazenamento.
+
+Este é um ótimo exemplo de por que tanto a mutabilidade quanto o escopo da variável podem causar alguns problemas sérios e bugs quando usados incorretamente. Ao passar ponteiros como um parâmetro de entrada de uma função, estamos expandindo o escopo da variável cujos dados estão sendo apontados. Ainda mais preocupante é o fato de que estamos expandindo o escopo para um nível indefinido. Estamos quase expandindo o escopo da variável para o nível global. Como demonstrado pelo exemplo acima, isso pode levar a bugs desastrosos que são particularmente difíceis de encontrar e erradicar.
+
+Felizmente, a correção para isso é bastante simples:
+
+```go
+func (store *UserStore) Insert(user User) error {
+    if store.userExists(user.ID) {
+        return ErrItemAlreadyExists
+    }
+    store.users[user.ID] = &user
+    return nil
+}
+```
+
+Em vez de passar um ponteiro para um struct `User`, agora estamos passando uma cópia de um `User`. Ainda estamos armazenando um ponteiro em nosso armazenamento; no entanto, em vez de armazenar o ponteiro de fora da função, estamos armazenando o ponteiro para o valor copiado, cujo escopo está dentro da função. Isso resolve o problema imediato, mas ainda pode causar problemas mais adiante se não tivermos cuidado. Considere este código:
+
+```go
+func (store *UserStore) Get(id int64) (*User, error) {
+    user, ok := store.users[id]
+    if !ok {
+        return EmptyUser, ErrUserNotFound
+    }
+    return store.users[id], nil
+}
+```
+
+Mais uma vez, essa é uma implementação muito padrão de uma função getter para nosso armazenamento. No entanto, ainda é um código ruim porque estamos mais uma vez expandindo o escopo do nosso ponteiro, o que pode acabar causando efeitos colaterais inesperados. Ao retornar o valor real do ponteiro, que estamos armazenando em nosso armazenamento de usuários, estamos essencialmente dando a outras partes da nossa aplicação a capacidade de mudar nossos valores de armazenamento. Isso é propenso a causar confusão. Nosso armazenamento deve ser a única entidade permitida a fazer alterações em seus valores. A correção mais simples para isso é retornar um valor de `User` em vez de retornar um ponteiro.
+
+NOTA: Considere o caso em que nossa aplicação usa múltiplas threads. Nesse cenário, passar ponteiros para o mesmo local de memória também pode potencialmente resultar em uma condição de corrida. Em outras palavras, não estamos apenas potencialmente corrompendo nossos dados — também poderíamos causar um pânico por uma corrida de dados.
+
+Tenha em mente que não há nada intrinsecamente errado em retornar ponteiros. No entanto, o escopo expandido das variáveis (e o número de proprietários apontando para essas variáveis) é a consideração mais importante ao trabalhar com ponteiros. Isso é o que classifica nosso exemplo anterior como uma operação ruim. Isso também é o motivo pelo qual construtores comuns em Go são absolutamente aceitáveis:
+
+```go
+func AddName(user *User, name string) {
+    user.Name = name
+}
+```
+
+Isso é aceitável porque o escopo da variável, que é definido por quem invoca a função, permanece o mesmo após a função retornar. Combinado com o fato de que o invocador da função permanece o único proprietário da variável, isso significa que o ponteiro não pode ser manipulado de uma maneira inesperada.
+
+### Fechamentos São Ponteiros de Função
+
+Antes de entrarmos no próximo tópico sobre o uso de interfaces em Go, gostaria de apresentar uma alternativa comum. É o que programadores C conhecem como "ponteiros de função" e o que a maioria das outras linguagens de programação chamam de fechamentos. Um fechamento é simplesmente um parâmetro de entrada como qualquer outro, exceto que representa (aponta para) uma função que pode ser invocada. Em JavaScript, é bastante comum usar fechamentos como callbacks, que são apenas funções que são invocadas após a conclusão de uma operação assíncrona. Em Go, não temos realmente essa noção. No entanto, podemos usar fechamentos para superar parcialmente um obstáculo diferente: A falta de generics.
+
+Considere a seguinte assinatura de função:
+
+```go
+func something(closure func(float64) float64) float64 { ... }
+```
+
+Aqui, `something` recebe outra função (um fechamento) como entrada e retorna um `float64`. A função de entrada recebe um `float64` como entrada e também retorna um `float64`. Esse padrão pode ser particularmente útil para criar uma arquitetura fracamente acoplada, facilitando a adição de funcionalidade sem afetar outras partes do código. Suponha que temos um struct contendo dados que queremos manipular de alguma forma. Através do método `Do()` dessa estrutura, podemos realizar operações nesses dados. Se conhecemos a operação com antecedência, podemos obviamente tratar essa lógica diretamente no nosso método `Do()`:
+
+```go
+func (datastore *Datastore) Do(operation Operation, data []byte) error {
+  switch(operation) {
+  case COMPARE:
+    return datastore.compare(data)
+  case CONCAT:
+    return datastore.add(data)
+  default:
+    return ErrUnknownOperation
+  }
+}
+```
+
+Mas, como você pode imaginar, essa função é bastante rígida — ela realiza uma operação predeterminada nos dados contidos no struct `Datastore`. Se em algum momento quisermos introduzir mais operações, acabaríamos inchando nosso método `Do()` com uma quantidade considerável de lógica irrelevante que seria difícil de manter. A função teria que sempre se preocupar com qual operação está realizando e percorrer várias opções aninhadas para cada operação. Isso também pode ser um problema para desenvolvedores que desejam usar nosso objeto `Datastore` e não têm acesso para editar nosso código de pacote, já que não há como estender métodos de estruturas em Go como na maioria das lingu
+
+agens OOP.
+
+Então, em vez disso, vamos tentar uma abordagem diferente usando fechamentos:
+
+```go
+func (datastore *Datastore) Do(operation func(data []byte, data []byte) ([]byte, error), data []byte) error {
+  result, err := operation(datastore.data, data)
+  if err != nil {
+    return err
+  }
+  datastore.data = result
+  return nil
+}
+
+func concat(a []byte, b []byte) ([]byte, error) {
+  ...
+}
+
+func main() {
+  ...
+  datastore.Do(concat, data)
+  ...
+}
+```
+
+Você notará imediatamente que a assinatura da função para `Do` acaba sendo bastante confusa. Também temos outro problema: O fechamento não é particularmente genérico. O que acontece se descobrirmos que na verdade queremos que o `concat` possa aceitar mais de dois arrays de bytes como entrada? Ou se quisermos adicionar alguma funcionalidade completamente nova que possa precisar de mais ou menos valores de entrada do que `(data []byte, data []byte)`?
+
+Uma maneira de resolver esse problema é mudar nossa função `concat`. No exemplo abaixo, eu a mudei para aceitar apenas um único array de bytes como argumento de entrada, mas poderia muito bem ter sido o caso oposto:
+
+```go
+func concat(data []byte) func(data []byte) ([]byte, error) {
+  return func(concatting []byte) ([]byte, error) {
+    return append(data, concatting), nil
+  }
+}
+
+func (datastore *Datastore) Do(operation func(data []byte) ([]byte, error)) error {
+  result, err := operation(datastore.data)
+  if err != nil {
+    return err
+  }
+  datastore.data = result
+  return nil
+}
+
+func main() {
+  ...
+  datastore.Do(concat(data))
+  ...
+}
+```
+
+Observe como efetivamente movemos parte da confusão da assinatura do método `Do` para a assinatura do método `concat`. Aqui, a função `concat` retorna outra função. Dentro da função retornada, armazenamos os valores de entrada originalmente passados para nossa função `concat`. A função retornada pode, portanto, agora aceitar um único parâmetro de entrada; dentro da lógica da nossa função, iremos anexá-lo ao nosso valor de entrada original. Como um conceito recém-introduzido, isso pode parecer bastante estranho. No entanto, é bom se acostumar a ter isso como uma opção; pode ajudar a soltar o acoplamento lógico e eliminar funções inchadas.
+
+Na próxima seção, entraremos em interfaces. Antes de fazermos isso, vamos dedicar um curto momento para discutir a diferença entre interfaces e fechamentos. Primeiro, vale a pena notar que interfaces e fechamentos definitivamente resolvem alguns problemas comuns. No entanto, a maneira como interfaces são implementadas em Go pode, às vezes, tornar complicado decidir se deve usar interfaces ou fechamentos para um problema específico. Geralmente, se uma interface ou um fechamento é usado, não é realmente importante; a escolha certa é a que resolve o problema em questão. Normalmente, fechamentos serão mais simples de implementar se a operação for simples por natureza. No entanto, assim que a lógica contida em um fechamento se torna complexa, deve-se considerar fortemente o uso de uma interface em vez disso.
+
+### Interfaces em Go
+
+De maneira geral, a abordagem do Go para o tratamento de interfaces é bastante diferente das de outras linguagens. Interfaces não são implementadas explicitamente como em Java ou C#; em vez disso, elas são criadas implicitamente se cumprirem o contrato da interface. Por exemplo, isso significa que qualquer struct que tenha um método `Error()` implementa (ou "cumpre") a interface `Error` e pode ser retornado como um erro. Esse modo de implementar interfaces é extremamente fácil e faz com que o Go pareça mais ágil e dinâmico.
+
+No entanto, há desvantagens com essa abordagem. Como a implementação da interface não é mais explícita, pode ser difícil ver quais interfaces são implementadas por um struct. Portanto, é comum definir interfaces com o menor número possível de métodos; isso facilita entender se um determinado struct cumpre o contrato da interface.
+
+Uma alternativa é criar construtores que retornam uma interface em vez do tipo concreto:
+
+```go
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+type NullWriter struct {}
+
+func (writer *NullWriter) Write(data []byte) (n int, err error) {
+    // não faz nada
+    return len(data), nil
+}
+
+func NewNullWriter() io.Writer {
+    return &NullWriter{}
+}
+```
+
+A função acima garante que o struct `NullWriter` implementa a interface `Writer`. Se removêssemos o método `Write` de `NullWriter`, teríamos um erro de compilação. Essa é uma boa maneira de garantir que nosso código se comporta como esperado e que podemos contar com o compilador como uma rede de segurança caso tentemos escrever código inválido.
+
+Em certos casos, pode não ser desejável escrever um construtor, ou talvez gostaríamos que nosso construtor retornasse o tipo concreto, em vez da interface. Por exemplo, o struct `NullWriter` não tem propriedades para serem inicializadas, então escrever um construtor é um pouco redundante. Portanto, podemos usar o método menos verboso de verificar a compatibilidade com a interface:
+
+```go
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+type NullWriter struct {}
+var _ io.Writer = &NullWriter{}
+```
+
+No código acima, estamos inicializando uma variável com o identificador em branco do Go, com a atribuição de tipo `io.Writer`. Isso faz com que nossa variável seja verificada para cumprir o contrato da interface `io.Writer`, antes de ser descartada. Esse método de verificar o cumprimento da interface também torna possível verificar que vários contratos de interface são cumpridos:
+
+```go
+type NullReaderWriter struct{}
+var _ io.Writer = &NullWriter{}
+var _ io.Reader = &NullWriter{}
+```
+
+Com o código acima, é muito fácil entender quais interfaces devem ser cumpridas; isso garante que o compilador nos ajudará durante o tempo de compilação. Portanto, essa é geralmente a solução preferida para verificar o cumprimento do contrato da interface.
+
+Há ainda outro método para tentar ser mais explícito sobre quais interfaces um dado struct implementa. No entanto, esse terceiro método na verdade alcança o oposto do que queremos. Envolve usar interfaces embutidas como uma propriedade do struct.
+
+Vamos recuar um pouco antes de mergulharmos na floresta proibida de Go. Em Go, podemos usar structs embutidos como um tipo de herança em nossas definições de structs. Isso é realmente útil, pois podemos desacoplar nosso código definindo structs reutilizáveis.
+
+```go
+type Metadata struct {
+    CreatedBy types.User
+}
+
+type Document struct {
+    *Metadata
+    Title string
+    Body string
+}
+
+type AudioFile struct {
+    *Metadata
+    Title string
+    Body string
+}
+```
+
+Acima, estamos definindo um objeto `Metadata` que nos fornecerá campos de propriedades que provavelmente usaremos em muitos tipos diferentes de structs. A vantagem de usar o struct embutido, em vez de definir explicitamente as propriedades diretamente em nosso struct, é que ele desacopla os campos de `Metadata`. Caso optemos por atualizar nosso objeto `Metadata`, podemos alterá-lo em um único lugar. Como vimos várias vezes, queremos garantir que uma mudança em um lugar do nosso código não quebre outras partes. Manter essas propriedades centralizadas deixa claro que estruturas com um `Metadata` embutido têm as mesmas propriedades—muito semelhante a como estruturas que atendem a interfaces têm os mesmos métodos.
+
+Agora, vejamos um exemplo de como podemos usar um construtor para evitar quebrar nosso código ao fazer alterações no nosso struct `Metadata`:
+
+```go
+func NewMetadata(user types.User) Metadata {
+    return &Metadata{
+        CreatedBy: user,
+    }
+}
+
+func NewDocument(title string, body string) Document {
+    return Document{
+        Metadata: NewMetadata(),
+        Title: title,
+        Body: body,
+    }
+}
+```
+
+Suponha que em um ponto futuro decidamos que também gostaríamos de um campo `CreatedAt` no nosso objeto `Metadata`. Podemos facilmente alcançar isso atualizando nosso construtor `NewMetadata`:
+
+```go
+func NewMetadata(user types.User) Metadata {
+    return &Metadata{
+        CreatedBy: user,
+        CreatedAt: time.Now(),
+    }
+}
+```
+
+Agora, tanto nossos structs `Document` quanto `AudioFile` são atualizados para também preencher esses campos na construção. Esse é o princípio central por trás do desacoplamento e um excelente exemplo de garantir a manutenção do código. Também podemos adicionar novos métodos sem quebrar nosso código existente:
+
+```go
+type Metadata struct {
+    CreatedBy types.User
+    CreatedAt time.Time
+    UpdatedBy types.User
+    UpdatedAt time.Time
+}
+
+func (metadata *Metadata) AddUpdateInfo(user types.User) {
+    metadata.UpdatedBy = user
+    metadata.UpdatedAt = time.Now()
+}
+```
+
+Novamente, sem quebrar o restante do nosso código, conseguimos introduzir novas funcionalidades. Esse tipo de programação torna a implementação de novas funcionalidades muito rápida e sem dor, o que é exatamente o que estamos tentando alcançar ao escrever código limpo.
+
+Voltemos ao tópico do cumprimento do contrato da interface usando interfaces embutidas. Considere o seguinte código como exemplo:
+
+```go
+type NullWriter struct {
+    Writer
+}
+
+func NewNullWriter() io.Writer {
+    return &NullWriter{}
+}
+```
+
+O código acima compila. Tecnicamente, estamos implementando a interface `Writer` em nosso `NullWriter`, já que `NullWriter` herdará todas as funções associadas a essa interface. Alguns veem isso como uma forma clara de mostrar que nosso `NullWriter` está implementando a interface `Writer`. No entanto, devemos ter cuidado ao usar essa técnica.
+
+```go
+func main() {
+    w := NewNullWriter()
+
+    w.Write([]byte{1, 2, 3})
+}
+```
+
+Como mencionado antes, o código acima compila. O `NewNullWriter` retorna um `Writer`, e tudo está bem de acordo com o compilador porque `NullWriter` cumpre o contrato de `io.Writer`, via a interface embutida. No entanto, executar o código acima resultará no seguinte:
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+```
+
+O que aconteceu? Um método de interface em Go é essencialmente um ponteiro de função. Nesse caso, como estamos apontando para a função de uma interface, em vez de uma implementação real de método, estamos tentando invocar uma função que é na verdade um ponteiro nulo. Para evitar isso, teríamos que fornecer ao `NullWriter` um struct que satisfaça o contrato da interface, com métodos realmente implementados.
+
+```go
+func main() {
+  w := NullWriter{
+    Writer: &bytes.Buffer{},
+  }
+
+    w.Write([]byte{1, 2, 3})
+}
+```
+
+NOTA: No exemplo acima, `Writer` está se referindo à interface embutida `io.Writer`. Também é possível invocar o método `Write` acessando essa propriedade com `w.Writer.Write()`.
+
+Agora não estamos mais gerando um pânico e podemos usar o `NullWriter` como um `Writer`. Esse processo de inicialização não é muito diferente de ter propriedades que são inicializadas como nulas, como discutido anteriormente. Portanto, logicamente, devemos tentar tratá-las de maneira semelhante. No entanto, é aqui que as interfaces embutidas se tornam um pouco difíceis de trabalhar. Em uma seção anterior, foi explicado que a melhor maneira de lidar com possíveis valores nulos é tornar a propriedade em questão privada e criar um método getter público. Dessa forma, poderíamos garantir que nossa propriedade não está, de fato, nula. Infelizmente, isso simplesmente não é possível com interfaces embutidas, pois elas são por natureza sempre públicas.
+
+Outra preocupação levantada ao usar interfaces embutidas é a confusão potencial causada por métodos de interface parcialmente sobrescritos:
+
+```go
+type MyReadCloser struct {
+  io.ReadCloser
+}
+
+func (closer *ReadCloser) Read(data []byte) { ... }
+
+func main() {
+  closer := MyReadCloser{}
+  
+  closer.Read([]byte{1, 2, 3}) 	// funciona bem
+  closer.Close() 		// causa pânico
+  closer.ReadCloser.Closer() 		// sem pânico 
+}
+```
+
+Embora isso possa parecer que estamos sobrescrevendo métodos, o que é comum em linguagens como C# e Java, na verdade não estamos. Go não suporta herança (e, portanto, não tem noção de superclasse). Podemos imitar o comportamento, mas isso não faz parte incorporada da linguagem. Ao usar métodos como a incorporação de interfaces sem cautela, podemos criar código confuso e potencialmente com bugs, apenas para economizar algumas linhas.
+
+NOTA: Alguns argumentam
+
+ que usar interfaces embutidas é uma boa maneira de criar uma estrutura mock para testar um subconjunto dos métodos da interface. Essencialmente, ao usar uma interface embutida, você não precisa implementar todos os métodos da interface; em vez disso, pode optar por implementar apenas alguns métodos que gostaria de testar. No contexto de testes/mock, vejo esse argumento, mas ainda não sou fã dessa abordagem.
+
+Vamos voltar rapidamente ao código limpo e ao uso adequado de interfaces. É hora de discutir o uso de interfaces como parâmetros e valores de retorno de funções. O provérbio mais comum para o uso de interfaces com funções em Go é o seguinte:
+
+*"Seja conservador no que você faz; seja liberal no que aceita dos outros" – Jon Postel*
+
+*FUN FACT: Esse provérbio na verdade não tem nada a ver com Go. Foi retirado de uma especificação inicial do protocolo de rede TCP.*
+
+Em outras palavras, você deve escrever funções que aceitam uma interface e retornam um tipo concreto. Isso é geralmente uma boa prática e é especialmente útil ao fazer testes com mocking. Como exemplo, podemos criar uma função que recebe uma interface de escritor como entrada e invoca o método `Write` dessa interface:
+
+```go
+type Pipe struct {
+    writer io.Writer
+    buffer bytes.Buffer
+}
+
+func NewPipe(w io.Writer) *Pipe {
+    return &Pipe{
+        writer: w,
+    }
+} 
+
+func (pipe *Pipe) Save() error {
+    if _, err := pipe.writer.Write(pipe.FlushBuffer()); err != nil {
+        return err
+    }
+    return nil
+}
+```
+
+Suponha que estamos escrevendo em um arquivo quando nosso aplicativo está rodando, mas não queremos escrever em um novo arquivo para todos os testes que invocam essa função. Podemos implementar um novo tipo mock que basicamente não faz nada. Essencialmente, isso é apenas injeção de dependência básica e mocking, mas o ponto é que é extremamente fácil de alcançar em Go:
+
+```go
+type NullWriter struct {}
+
+func (w *NullWriter) Write(data []byte) (int, error) {
+    return len(data), nil
+}
+
+func TestFn(t *testing.T) {
+    ...
+    pipe := NewPipe(NullWriter{})
+    ...
+}
+```
+
+NOTA: Na verdade, já existe uma implementação de writer nulo incorporada no pacote `ioutil` chamada `Discard`.
+
+Ao construir nosso struct `Pipe` com `NullWriter` (em vez de um escritor diferente), quando invocamos nossa função `Save`, nada acontecerá. A única coisa que tivemos que fazer foi adicionar quatro linhas de código. É por isso que é incentivado tornar interfaces o menor possível em Go idiomático—isso torna especialmente fácil implementar padrões como o que acabamos de ver. No entanto, essa implementação de interfaces também vem com um grande lado negativo.
+
+### A Interface Vazia em Go
+
+Diferente de outras linguagens, Go não possui uma implementação de genéricos. Houve muitas propostas para isso, mas todas foram rejeitadas pela equipe da linguagem Go. Infelizmente, sem genéricos, os desenvolvedores precisam encontrar alternativas criativas, o que muitas vezes envolve o uso da interface vazia `interface{}`. Esta seção descreve por que essas implementações muitas vezes excessivamente criativas devem ser consideradas uma má prática e código sujo. Também serão apresentados exemplos de uso apropriado da interface vazia `interface{}` e como evitar algumas armadilhas ao escrever código com ela.
+
+Como mencionado em uma seção anterior, o Go determina se um tipo concreto implementa uma interface específica verificando se o tipo implementa os métodos dessa interface. Então, o que acontece se nossa interface não declarar nenhum método, como é o caso da interface vazia?
+
+```go
+type EmptyInterface interface {}
+```
+
+O código acima é equivalente ao tipo embutido `interface{}`. Uma consequência natural disso é que podemos escrever funções genéricas que aceitam qualquer tipo como argumentos. Isso é extremamente útil para certos tipos de funções, como ajudantes de impressão. Curiosamente, isso é o que torna possível passar qualquer tipo para a função `Println` do pacote `fmt`:
+
+```go
+func Println(v ...interface{}) {
+    ...
+}
+```
+
+Nesse caso, `Println` não está aceitando apenas uma única `interface{}`; na verdade, a função aceita um slice de tipos que implementam a interface vazia `interface{}`. Como não há métodos associados à interface vazia, todos os tipos são aceitos, tornando possível passar para `Println` um slice de tipos diferentes. Esse é um padrão muito comum ao lidar com conversão de strings (tanto de quanto para uma string). Bons exemplos disso vêm do pacote padrão `json`:
+
+```go
+func InsertItemHandler(w http.ResponseWriter, r *http.Request) {
+    var item Item
+    if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    if err := db.InsertItem(item); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    w.WriteHeader(http.StatusOK)
+}
+```
+
+Todo o código menos elegante está contido dentro da função `Decode`. Assim, os desenvolvedores que utilizam essa funcionalidade não precisam se preocupar com reflexão de tipo ou casting de tipo; só temos que nos preocupar em fornecer um ponteiro para um tipo concreto. Isso é bom porque a função `Decode()` está tecnicamente retornando um tipo concreto. Estamos passando nosso valor `Item`, que será populado a partir do corpo da requisição HTTP. Isso significa que não precisamos lidar com os riscos potenciais de manipular o valor `interface{}` por conta própria.
+
+No entanto, mesmo ao usar a interface vazia `interface{}` com boas práticas de programação, ainda temos alguns problemas. Se passarmos uma string JSON que não tem nada a ver com nosso tipo `Item`, mas ainda é um JSON válido, não receberemos um erro—nossa variável `item` simplesmente ficará com os valores padrão. Portanto, embora não precisemos nos preocupar com erros de reflexão e casting, ainda precisamos garantir que a mensagem enviada pelo nosso cliente seja um tipo `Item` válido. Infelizmente, no momento da escrita deste documento, não há uma maneira simples ou boa de implementar esses tipos de decodificadores genéricos sem usar o tipo `interface{}`.
+
+O problema com o uso de `interface{}` dessa maneira é que estamos tendendo a usar Go, uma linguagem de tipo estático, como uma linguagem de tipo dinâmico. Isso fica ainda mais claro ao observar implementações ruins do tipo `interface{}`. O exemplo mais comum disso vem de desenvolvedores tentando implementar um armazenamento ou lista genérica de algum tipo.
+
+Vamos ver um exemplo de tentativa de implementar um pacote genérico HashMap que pode armazenar qualquer tipo usando `interface{}`.
+
+```go
+type HashMap struct {
+    store map[string]interface{}
+}
+
+func (hashmap *HashMap) Insert(key string, value interface{}) {
+    hashmap.store[key] = value
+}
+
+func (hashmap *HashMap) Get(key string) (interface{}, error) {
+    value, ok := hashmap.store[key]
+    if !ok {
+        return nil, ErrKeyNotFoundInHashMap
+    }
+    return value
+}
+```
+
+NOTA: O exemplo acima omite segurança de threads para mantê-lo simples.
+
+Por favor, tenha em mente que o padrão de implementação mostrado acima é, na verdade, usado em muitos pacotes Go. Ele é até usado no pacote padrão `sync` para o tipo `sync.Map`. Então, qual é o problema com essa implementação? Bem, vamos dar uma olhada em um exemplo de uso do pacote:
+
+```go
+func SomeFunction(id string) (Item, error) {
+    itemIface, err := hashmap.Get(id)
+    if err != nil {
+        return EmptyItem, err
+    }
+    item, ok := itemIface.(Item)
+    if !ok {
+        return EmptyItem, ErrCastingItem
+    }
+    return item, nil
+}
+```
+
+À primeira vista, isso parece bom. No entanto, começaremos a ter problemas se adicionarmos tipos diferentes ao nosso armazenamento, algo que atualmente é permitido. Não há nada impedindo-nos de adicionar algo além do tipo `Item`. Então, o que acontece quando alguém começa a adicionar outros tipos ao nosso `HashMap`, como um ponteiro `*Item` em vez de um `Item`? Nossa função agora pode retornar um erro. O pior de tudo é que isso pode nem mesmo ser detectado pelos nossos testes. Dependendo da complexidade do sistema, isso pode introduzir alguns bugs que são particularmente difíceis de depurar.
+
+Esse tipo de código nunca deve chegar à produção. Lembre-se: Go não (ainda) suporta genéricos. Isso é apenas um fato que os desenvolvedores devem aceitar por enquanto. Se quisermos usar genéricos, então deveríamos usar uma linguagem diferente que suporte genéricos, em vez de confiar em hacks perigosos.
+
+Então, como evitamos que esse código chegue à produção? A solução mais simples é escrever as funções com tipos concretos em vez de usar valores `interface{}`. Claro, essa nem sempre é a melhor abordagem, pois pode haver alguma funcionalidade dentro do pacote que não é trivial de implementar por conta própria. Portanto, uma abordagem melhor pode ser criar wrappers que exponham a funcionalidade que precisamos, mas ainda garantam a segurança do tipo:
+
+```go
+type ItemCache struct {
+  kv tinykv.KV
+} 
+
+func (cache *ItemCache) Get(id string) (Item, error) {
+  value, ok := cache.kv.Get(id)
+  if !ok {
+    return EmptyItem, ErrItemNotFound
+  }
+  return interfaceToItem(value)
+}
+
+func interfaceToItem(v interface{}) (Item, error) {
+  item, ok := v.(Item)
+  if !ok {
+    return EmptyItem, ErrCouldNotCastItem
+  }
+  return item, nil
+}
+
+func (cache *ItemCache) Put(id string, item Item) error {
+  return cache.kv.Put(id, item)
+}
+```
+
+NOTA: Implementações de outras funcionalidades do cache `tinykv.KV` foram omitidas por brevidade.
+
+O wrapper acima agora garante que estamos usando os tipos reais e que não estamos mais passando tipos `interface{}`. Assim, não é mais possível acidentalmente preencher nosso armazenamento com um tipo de valor errado e restringimos o nosso casting de tipos tanto quanto possível. Esta é uma maneira muito direta de resolver nosso problema, mesmo que um pouco manual.

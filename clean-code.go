@@ -5,7 +5,7 @@ package cleancode
 // Introdução ao código limpo: promove software legível e manutenível.
 
 // Desenvolvimento Orientado a Testes
-// Escreve testes frequentemente e refatora o código. Exemplo de uma função pequena e específica:
+// Escreva testes frequentemente e refatore o código. Exemplo de uma função pequena e específica:
 func Add(a int, b int) int {
     return a + b
 }
