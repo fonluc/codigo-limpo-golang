@@ -20,26 +20,13 @@ Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt,
 
 ### Sumário
 
-- [Introdução ao Código Limpo](#Introdução ao Código Limpo)
-- [Desenvolvimento Orientado a Testes] (#Desenvolvimento Orientado a Testes)
-- Convenções de Nomenclatura
-- Comentários
-- Nomeação de Funções
-- Nomeação de Variáveis
-- Limpando Funções
-- Comprimento de Funções
-- Assinaturas de Funções
-- Escopo de Variáveis
-- Declaração de Variáveis
-- Go Limpo
-- Valores de Retorno
-- Retornando Erros Definidos
-- Retornando Erros Dinâmicos
-- Ponteiros em Go
-- Closures São Ponteiros de Função
-- Interfaces em Go
-- A interface vazia {}
-- Resumo
+- [Código Go Limpo](#código-go-limpo)
+  - [Prefácio: Por que Escrever Código Limpo?](#prefácio-por-que-escrever-código-limpo)
+    - [Sumário](#sumário)
+    - [Introdução ao Código Limpo](#introdução-ao-código-limpo)
+    - [Desenvolvimento Orientado a Testes](#desenvolvimento-orientado-a-testes)
+    - [Convenções de Nomenclatura](#convenções-de-nomenclatura)
+      - [Comentários](#comentários)
 
 ### Introdução ao Código Limpo
 
