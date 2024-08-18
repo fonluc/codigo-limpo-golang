@@ -29,6 +29,9 @@ Gostaria de dedicar algumas frases para esclarecer minha opinião sobre o gofmt,
     - [Comentários](#comentários)
     - [Nomeação de Funções](#nomeação-de-funções)
     - [Nomeação de Variáveis](#nomeação-de-variáveis)
+    - [Limpeza de Funções](#limpeza-de-funções)
+    - [Comprimento da Função](#comprimento-da-função)
+    - [Assinaturas de Função](#assinaturas-de-função)
 
 ### Introdução ao Código Limpo
 
@@ -187,3 +190,337 @@ func BeerBrandListToBeerList(b []BeerBrand) []Beer {
 ```
 
 Embora seja possível descobrir o que essa função está fazendo, a brevidade excessiva dos nomes das variáveis torna difícil seguir a lógica conforme viajamos mais fundo. Isso pode facilmente se transformar em uma confusão total, pois estamos misturando nomes de variáveis curtos e longos de forma inconsistente.
+
+### Limpeza de Funções
+
+Agora que conhecemos algumas boas práticas para nomear nossas variáveis e funções, bem como para esclarecer nosso código com comentários, vamos explorar algumas especificidades de como podemos refatorar funções para torná-las mais limpas.
+
+### Comprimento da Função  
+Qual deve ser o tamanho de uma função? Menor do que isso! – Robert C. Martin
+
+Ao escrever código limpo, nosso objetivo principal é tornar o código facilmente digerível. A forma mais eficaz de fazer isso é manter nossas funções o mais curtas possível. É importante entender que não fazemos isso apenas para evitar a duplicação de código. A razão mais importante é melhorar a compreensão do código.
+
+Pode ajudar olhar para a descrição de uma função de forma muito geral para entender melhor:
+
+```go
+fn GetItem:
+    - analisar entrada JSON para o ID do pedido
+    - obter usuário do contexto
+    - verificar se o usuário tem a função apropriada
+    - obter pedido do banco de dados
+```
+
+Ao escrever funções curtas (que geralmente têm de 5 a 8 linhas em Go), podemos criar código que lê quase tão naturalmente quanto a descrição acima:
+
+```go
+var (
+    NullItem = Item{}
+    ErrInsufficientPrivileges = errors.New("usuário não tem privilégios suficientes")
+)
+
+func GetItem(ctx context.Context, json []byte) (Item, error) {
+    order, err := NewItemFromJSON(json)
+    if err != nil {
+        return NullItem, err
+    }
+    if !GetUserFromContext(ctx).IsAdmin() {
+        return NullItem, ErrInsufficientPrivileges
+    }
+    return db.GetItem(order.ItemID)
+}
+```
+
+Usar funções menores também elimina outro hábito terrível de escrever código: o inferno da indentação. O inferno da indentação geralmente ocorre quando uma cadeia de instruções `if` é descuidadamente aninhada em uma função. Isso torna muito difícil para os humanos entenderem o fluxo do código e deve ser eliminado sempre que for detectado. O inferno da indentação é particularmente comum ao trabalhar com `interface{}` e ao usar casting de tipo:
+
+```go
+func GetItem(extension string) (Item, error) {
+    if refIface, ok := db.ReferenceCache.Get(extension); ok {
+        if ref, ok := refIface.(string); ok {
+            if itemIface, ok := db.ItemCache.Get(ref); ok {
+                if item, ok := itemIface.(Item); ok {
+                    if item.Active {
+                        return Item, nil
+                    } else {
+                        return EmptyItem, errors.New("nenhum item ativo encontrado no cache")
+                    }
+                } else {
+                    return EmptyItem, errors.New("não foi possível fazer cast da interface de cache para Item")
+                }
+            } else {
+                return EmptyItem, errors.New("extensão não encontrada na referência do cache")
+            }
+        } else {
+            return EmptyItem, errors.New("não foi possível fazer cast da interface de referência do cache para Item")
+        }
+    }
+    return EmptyItem, errors.New("referência não encontrada no cache")
+}
+```
+
+Primeiro, o inferno da indentação torna difícil para outros desenvolvedores entenderem o fluxo do seu código. Em segundo lugar, se a lógica em nossas instruções `if` se expandir, será exponencialmente mais difícil descobrir qual instrução retorna o quê (e garantir que todos os caminhos retornem algum valor). Outro problema é que essa profundidade de aninhamento de declarações condicionais força o leitor a rolar frequentemente e acompanhar muitos estados lógicos na cabeça. Isso também torna mais difícil testar o código e encontrar bugs, pois há muitas possibilidades diferentes aninhadas que você tem que considerar.
+
+O inferno da indentação pode resultar em fadiga do leitor se um desenvolvedor tiver que analisar constantemente código difícil de manejar como o exemplo acima. Naturalmente, isso é algo que queremos evitar a todo custo.
+
+Então, como limpamos essa função? Felizmente, é bastante simples. Em nossa primeira tentativa, vamos tentar garantir que estamos retornando um erro o mais rápido possível. Em vez de aninhar os `if` e `else`, queremos "empurrar nosso código para a esquerda", por assim dizer. Veja:
+
+```go
+func GetItem(extension string) (Item, error) {
+    refIface, ok := db.ReferenceCache.Get(extension)
+    if !ok {
+        return EmptyItem, errors.New("referência não encontrada no cache")
+    }
+
+    ref, ok := refIface.(string)
+    if !ok {
+        // retornar erro de cast na referência 
+    }
+
+    itemIface, ok := db.ItemCache.Get(ref)
+    if !ok {
+        // retornar nenhum item encontrado no cache pela referência
+    }
+
+    item, ok := itemIface.(Item)
+    if !ok {
+        // retornar erro de cast na interface do item
+    }
+
+    if !item.Active {
+        // retornar nenhum item ativo
+    }
+
+    return Item, nil
+}
+```
+
+Depois de concluir nossa primeira tentativa de refatoração da função, podemos prosseguir para dividir a função em funções menores. Aqui está uma boa regra: Se o padrão `value, err :=` é repetido mais de uma vez em uma função, isso indica que podemos dividir a lógica do nosso código em partes menores:
+
+```go
+func GetItem(extension string) (Item, error) {
+    ref, ok := getReference(extension)
+    if !ok {
+        return EmptyItem, ErrReferenceNotFound
+    }
+    return getItemByReference(ref)
+}
+
+func getReference(extension string) (string, bool) {
+    refIface, ok := db.ReferenceCache.Get(extension)
+    if !ok {
+        return "", false
+    }
+    return refIface.(string), true
+}
+
+func getItemByReference(reference string) (Item, error) {
+    item, ok := getItemFromCache(reference)
+    if !item.Active || !ok {
+        return EmptyItem, ErrItemNotFound
+    }
+    return item, nil
+}
+
+func getItemFromCache(reference string) (Item, bool) {
+    if itemIface, ok := db.ItemCache.Get(reference); ok {
+        return itemIface.(Item), true
+    }
+    return Item{}, false
+}
+```
+
+Como mencionado anteriormente, o inferno da indentação pode dificultar o teste do nosso código. Quando dividimos nossa função GetItem em várias funções auxiliares, tornamos mais fácil rastrear bugs ao testar nosso código. Ao contrário da versão original, que consistia em várias instruções `if` no mesmo escopo, a versão refatorada de GetItem tem apenas dois caminhos de ramificação que precisamos considerar. As funções auxiliares também são curtas e digeríveis, tornando-as mais fáceis de ler.
+
+Nota: Para código de produção, deve-se elaborar ainda mais o código retornando erros em vez de valores booleanos. Isso facilita a compreensão de onde o erro está originando. No entanto, como estas são apenas funções de exemplo, retornar valores booleanos será suficiente por agora. Exemplos de retorno de erros de forma mais explícita serão explicados em mais detalhes mais adiante.
+
+Observe que a limpeza da função GetItem resultou em mais linhas de código no total. No entanto, o código agora está muito mais fácil de ler. Está organizado em uma estrutura em camadas, onde podemos ignorar "camadas" que não nos interessam e simplesmente descascar aquelas que queremos examinar. Isso facilita a compreensão da funcionalidade de baixo nível, pois só precisamos ler talvez de 3 a 5 linhas por vez.
+
+Este exemplo ilustra que não podemos medir a limpeza do nosso código pelo número de linhas que ele usa. A primeira versão do código era certamente muito mais curta. No entanto, era artificialmente curta e muito difícil de ler. Na maioria dos casos, limpar o código inicialmente expandirá a base de código existente em termos de número de linhas. Mas isso é altamente preferível à alternativa de ter uma lógica confusa e bagunçada. Se você estiver em dúvida sobre isso, considere como você se sente em relação à seguinte função, que faz exatamente a mesma coisa que o nosso código, mas usa apenas duas linhas:
+
+```go
+func GetItemIfActive(extension string) (Item, error) {
+    if refIface, ok := db.ReferenceCache.Get(extension); ok {
+        if ref, ok := refIface.(string); ok {
+            if itemIface, ok := db.ItemCache.Get(ref); ok {
+                if item, ok := itemIface.(Item); ok {
+                    if item.Active {
+                        return item, nil
+                    }
+                }
+            }
+        }
+    }
+    return EmptyItem, errors.New("referência não encontrada no cache")
+}
+```
+
+### Assinaturas de Função  
+Criar uma boa estrutura de nomeação de função torna mais fácil ler e entender a intenção do código. Como vimos acima, fazer nossas funções mais curtas ajuda a entender a lógica da função. A última parte de limpar nossas funções envolve entender o contexto da entrada da função. Com isso vem outra regra fácil de seguir: Assinaturas de função devem conter apenas um ou dois parâmetros de entrada. Em alguns casos excepcionais, três podem ser aceitáveis, mas é aqui que devemos começar a considerar uma refatoração. Assim como a regra de que nossas funções devem ter apenas 5–8 linhas, isso pode parecer bastante extremo no início. No entanto, sinto que esta regra é muito mais fácil de justificar.
+
+Pegue a seguinte função do tutorial de introdução do RabbitMQ à sua biblioteca Go:
+
+```go
+q, err := ch.QueueDeclare(
+  "hello", // nome
+  false,   // durável
+  false,   // deletar quando não utilizado
+  false,   // exclusivo
+  false,   // sem espera
+  nil,     // argumentos
+)
+```
+
+A função QueueDeclare aceita seis parâmetros de entrada,
+
+ o que é bastante. Com algum esforço, é possível entender o que esse código faz graças aos comentários. No entanto, os comentários são, na verdade, parte do problema—como mencionado anteriormente, eles devem ser substituídos por código descritivo sempre que possível. Afinal, não há nada que nos impeça de invocar a função QueueDeclare sem comentários:
+
+```go
+q, err := ch.QueueDeclare("hello", false, false, false, false, nil)
+```
+
+Agora, sem olhar para a versão comentada, tente lembrar o que os quarto e quinto argumentos `false` representam. É impossível, certo? Você inevitavelmente esquecerá em algum momento. Isso pode levar a erros custosos e bugs difíceis de corrigir. Os erros podem até ocorrer através de comentários incorretos—imagine rotular o parâmetro de entrada errado. Corrigir esse erro será insuportavelmente difícil, especialmente quando a familiaridade com o código tiver se deteriorado ao longo do tempo ou era baixa para começar. Portanto, recomenda-se substituir esses parâmetros de entrada por uma estrutura `Options`:
+
+```go
+type QueueOptions struct {
+    Name string
+    Durable bool
+    DeleteOnExit bool
+    Exclusive bool
+    NoWait bool
+    Arguments []interface{}
+}
+
+q, err := ch.QueueDeclare(QueueOptions{
+    Name: "hello",
+    Durable: false,
+    DeleteOnExit: false,
+    Exclusive: false,
+    NoWait: false,
+    Arguments: nil,
+})
+```
+
+Isso resolve dois problemas: uso incorreto de comentários e rotulagem acidental incorreta das variáveis. Claro, ainda podemos confundir propriedades com o valor errado, mas nesses casos, será muito mais fácil determinar onde está nosso erro dentro do código. A ordenação das propriedades também não importa mais, portanto, a ordenação incorreta dos valores de entrada não é mais uma preocupação. O último benefício adicional dessa técnica é que podemos usar nossa estrutura QueueOptions para inferir os valores padrão dos parâmetros de entrada da nossa função. Quando estruturas em Go são declaradas, todas as propriedades são inicializadas com seu valor padrão. Isso significa que nossa opção QueueDeclare pode na verdade ser invocada da seguinte maneira:
+
+```go
+q, err := ch.QueueDeclare(QueueOptions{
+    Name: "hello",
+})
+```
+
+Os outros valores são inicializados com seu valor padrão de `false` (exceto para `Arguments`, que como uma interface tem um valor padrão de `nil`). Não só estamos muito mais seguros com essa abordagem, mas também somos muito mais claros com nossas intenções. Nesse caso, poderíamos realmente escrever menos código. Isso é um ganho geral para todos no projeto.
+
+Uma nota final sobre isso: Não é sempre possível mudar a assinatura de uma função. Neste caso, por exemplo, não temos controle sobre a assinatura da função QueueDeclare porque ela é da biblioteca RabbitMQ. Não é nosso código, então não podemos alterá-lo. No entanto, podemos envolver essas funções para adequá-las aos nossos propósitos:
+
+```go
+type RMQChannel struct {
+    channel *amqp.Channel
+}
+
+func (rmqch *RMQChannel) QueueDeclare(opts QueueOptions) (Queue, error) {
+    return rmqch.channel.QueueDeclare(
+        opts.Name,
+        opts.Durable,
+        opts.DeleteOnExit,
+        opts.Exclusive,
+        opts.NoWait,
+        opts.Arguments,
+    )
+}
+```
+
+Basicamente, criamos uma nova estrutura chamada RMQChannel que contém o tipo `amqp.Channel`, que tem o método QueueDeclare. Em seguida, criamos nossa própria versão desse método, que basicamente apenas chama a versão antiga da função da biblioteca RabbitMQ. Nosso novo método tem todas as vantagens descritas anteriormente, e conseguimos isso sem ter que alterar nenhum código na biblioteca RabbitMQ.
+
+Usaremos essa ideia de envolver funções para introduzir código mais limpo e seguro mais adiante ao discutir `interface{}`.
+
+**Escopo de Variáveis**  
+Agora, vamos dar um passo atrás e revisar a ideia de escrever funções menores. Isso tem outro efeito colateral agradável que não cobrimos no capítulo anterior: escrever funções menores pode tipicamente eliminar a dependência de variáveis mutáveis que vazam para o escopo global.
+
+Variáveis globais são problemáticas e não pertencem a código limpo; elas tornam muito difícil para os programadores entenderem o estado atual de uma variável. Se uma variável é global e mutável, então por definição, seu valor pode ser alterado por qualquer parte da base de código. Em nenhum momento você pode garantir que essa variável terá um valor específico... E isso é uma dor de cabeça para todos. Este é mais um exemplo de um problema trivial que é exacerbado quando a base de código se expande.
+
+Vamos ver um exemplo curto de como variáveis não globais com um grande escopo podem causar problemas. Essas variáveis também introduzem o problema do sombreamento de variáveis, como demonstrado no código retirado de um artigo intitulado "Golang scope issue":
+
+```go
+func doComplex() (string, error) {
+    return "Success", nil
+}
+
+func main() {
+    var val string
+    num := 32
+
+    switch num {
+    case 16:
+        // não fazer nada
+    case 32:
+        val, err := doComplex()
+        if err != nil {
+            panic(err)
+        }
+        if val == "" {
+            // fazer algo mais
+        }
+    case 64:
+        // não fazer nada
+    }
+
+    fmt.Println(val)
+}
+```
+
+Qual é o problema com este código? À primeira vista, parece que o valor da variável `val` deve ser impresso como "Success" ao final da função `main`. Infelizmente, não é o caso. A razão para isso está na linha seguinte:
+
+```go
+val, err := doComplex()
+```
+
+Isso declara uma nova variável `val` no escopo do caso `32` do switch e não tem relação com a variável declarada na primeira linha de `main`. Claro, pode-se argumentar que a sintaxe de Go é um pouco complicada, o que eu não discordo necessariamente, mas há um problema muito pior em questão. A declaração de `var val string` como uma variável mutável e de escopo amplo é completamente desnecessária. Se fizermos uma refatoração muito simples, não teremos mais esse problema:
+
+```go
+func getStringResult(num int) (string, error) {
+    switch num {
+    case 16:
+        // não fazer nada
+    case 32:
+        return doComplex()
+    case 64:
+        // não fazer nada
+    }
+    return "", nil
+}
+
+func main() {
+    val, err := getStringResult(32)
+    if err != nil {
+        panic(err)
+    }
+    if val == "" {
+        // fazer algo mais
+    }
+    fmt.Println(val)
+}
+```
+
+Após nossa refatoração, `val` não é mais modificado, e o escopo foi reduzido. Novamente, lembre-se de que essas funções são muito simples. Uma vez que esse estilo de código se torna parte de sistemas maiores e mais complexos, pode ser impossível descobrir por que os erros estão ocorrendo. Não queremos que isso aconteça—não só porque geralmente não gostamos de erros de software, mas também porque é desrespeitoso para nossos colegas e para nós mesmos; estamos potencialmente desperdiçando o tempo uns dos outros tendo que depurar esse tipo de código. Os desenvolvedores precisam assumir a responsabilidade por seu próprio código, em vez de culpar esses problemas na sintaxe de declaração de variáveis de uma linguagem específica como Go.
+
+A propósito, se a parte `// fazer algo mais` é outra tentativa de modificar a variável `val`, devemos extrair essa lógica para uma função autossuficiente, assim como a parte anterior. Dessa forma, em vez de expandir o escopo mutável de nossas variáveis, podemos simplesmente retornar um novo valor:
+
+```go
+func getVal(num int) (string, error) {
+    val, err := getStringResult(num)
+    if err != nil {
+        return "", err
+    }
+    if val == "" {
+        return NewValue() // função fictícia
+    }
+    return val, err
+}
+
+func main() {
+    val, err := getVal(32)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(val)
+}
+```
