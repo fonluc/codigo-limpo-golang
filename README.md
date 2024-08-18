@@ -2,6 +2,8 @@
 
 ![comic](assets/clean-code-comic.jpeg)
 
+*Traduzido de: "https://github.com/Pungyeon/clean-go-article"*
+
 ## Prefácio: Por que Escrever Código Limpo?
 
 Este documento é uma referência para a comunidade Go, que visa ajudar os desenvolvedores a escreverem códigos mais limpos. Seja trabalhando em um projeto pessoal ou como parte de uma equipe maior, escrever código limpo é uma habilidade importante. Estabelecer bons paradigmas e padrões consistentes e acessíveis para a escrita de código limpo pode ajudar a evitar que os desenvolvedores percam horas tentando entender seu próprio trabalho (ou o de outros).
